@@ -249,14 +249,12 @@ Key.prototype.armor = function() {
   return armor.encode(type, this.toPacketlist().write());
 };
 
-function isValidSigningKeyPacket(keyPacket, signature, date=new Date()) {
+function isValidSigningKeyPacket(keyPacket, signature) {
   return keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.rsa_encrypt) &&
          keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.elgamal) &&
          keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.ecdh) &&
          (!signature.keyFlags ||
-          (signature.keyFlags[0] & enums.keyFlags.sign_data) !== 0) &&
-         signature.verified && !signature.revoked && !signature.isExpired(date) &&
-         !isDataExpired(keyPacket, signature, date);
+          (signature.keyFlags[0] & enums.keyFlags.sign_data) !== 0);
 }
 
 /**
@@ -272,16 +270,17 @@ Key.prototype.getSigningKeyPacket = async function (keyId=null, date=new Date())
   if (await this.verifyPrimaryKey(date) === enums.keyStatus.valid) {
     const primaryUser = await this.getPrimaryUser(date);
     if (primaryUser && (!keyId || primaryKey.getKeyId().equals(keyId)) &&
-        isValidSigningKeyPacket(primaryKey, primaryUser.selfCertification, date)) {
+        isValidSigningKeyPacket(primaryKey, primaryUser.selfCertification)) {
       return primaryKey;
     }
     for (let i = 0; i < this.subKeys.length; i++) {
       if (!keyId || this.subKeys[i].subKey.getKeyId().equals(keyId)) {
         // eslint-disable-next-line no-await-in-loop
-        await this.subKeys[i].verify(primaryKey, date);
-        for (let j = 0; j < this.subKeys[i].bindingSignatures.length; j++) {
-          if (isValidSigningKeyPacket(this.subKeys[i].subKey, this.subKeys[i].bindingSignatures[j], date)) {
-            return this.subKeys[i].subKey;
+        if (await this.subKeys[i].verify(primaryKey, date) === enums.keyStatus.valid) {
+          for (let j = 0; j < this.subKeys[i].bindingSignatures.length; j++) {
+            if (isValidSigningKeyPacket(this.subKeys[i].subKey, this.subKeys[i].bindingSignatures[j])) {
+              return this.subKeys[i].subKey;
+            }
           }
         }
       }
@@ -290,17 +289,14 @@ Key.prototype.getSigningKeyPacket = async function (keyId=null, date=new Date())
   return null;
 };
 
-function isValidEncryptionKeyPacket(keyPacket, signature, date=new Date()) {
-  const normDate = util.normalizeDate(date);
+function isValidEncryptionKeyPacket(keyPacket, signature) {
   return keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.dsa) &&
          keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.rsa_sign) &&
          keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.ecdsa) &&
          keyPacket.algorithm !== enums.read(enums.publicKey, enums.publicKey.eddsa) &&
          (!signature.keyFlags ||
           (signature.keyFlags[0] & enums.keyFlags.encrypt_communication) !== 0 ||
-          (signature.keyFlags[0] & enums.keyFlags.encrypt_storage) !== 0) &&
-         signature.verified && !signature.revoked && !signature.isExpired(date) &&
-         !isDataExpired(keyPacket, signature, date);
+          (signature.keyFlags[0] & enums.keyFlags.encrypt_storage) !== 0);
 }
 
 /**
@@ -321,10 +317,11 @@ Key.prototype.getEncryptionKeyPacket = async function(keyId, date=new Date()) {
     for (let i = 0; i < this.subKeys.length; i++) {
       if (!keyId || this.subKeys[i].subKey.getKeyId().equals(keyId)) {
         // eslint-disable-next-line no-await-in-loop
-        await this.subKeys[i].verify(primaryKey, date);
-        for (let j = 0; j < this.subKeys[i].bindingSignatures.length; j++) {
-          if (isValidEncryptionKeyPacket(this.subKeys[i].subKey, this.subKeys[i].bindingSignatures[j], date)) {
-            return this.subKeys[i].subKey;
+        if (await this.subKeys[i].verify(primaryKey, date) === enums.keyStatus.valid) {
+          for (let j = 0; j < this.subKeys[i].bindingSignatures.length; j++) {
+            if (isValidEncryptionKeyPacket(this.subKeys[i].subKey, this.subKeys[i].bindingSignatures[j])) {
+              return this.subKeys[i].subKey;
+            }
           }
         }
       }
@@ -332,7 +329,7 @@ Key.prototype.getEncryptionKeyPacket = async function(keyId, date=new Date()) {
     // if no valid subkey for encryption, evaluate primary key
     const primaryUser = await this.getPrimaryUser(date);
     if (primaryUser && (!keyId || primaryKey.getKeyId().equals(keyId)) &&
-        isValidEncryptionKeyPacket(primaryKey, primaryUser.selfCertification, date)) {
+        isValidEncryptionKeyPacket(primaryKey, primaryUser.selfCertification)) {
       return primaryKey;
     }
   }
